@@ -1,0 +1,12 @@
+# Get-Lockout-Events
+
+The scrips Gets lockout events from all domain controllers for specific user.
+
+The script checks all domain controllers for 4771,4768,4769,4625,4740,4767 and 4776 event logs and gets only the events with wrong password provided.
+
+To use it run the PowerShell scrips and pass the username and the domain name. 
+ 
+.\GetLockoutEvents.ps1 Ahmed Corp
+
+The script generates a csv file with all events sorted by date.
+ 
