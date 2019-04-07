@@ -1,0 +1,169 @@
+#region Parameters 
+
+Param(
+    [Parameter(Mandatory = $True)] $UserName,
+    [Parameter(Mandatory = $True)] $DomainName 
+)
+
+#endregion 
+
+
+#region Check domain and user variables
+try 
+{
+  Write-Host "Checking whether domain" $DomainName "exist or not" 
+  if (Get-ADDomain $DomainName) 
+   {
+    Write-Host "Domain" $DomainName "already exist" -fore Green
+   }
+
+}
+
+
+catch 
+{
+
+ write-host $_.Exception.Message -fore Red
+ break 
+
+}
+
+
+#check whether the user exist or not
+try
+{
+   Write-Host "Checking whether AD user" $UserName "exist or not" 
+   if (Get-ADUser -Identity $UserName -Server $DomainName) 
+    {
+     Write-Host "AD user" $UserName "already exist in" $DomainName "domain" -fore Green
+    }
+}
+
+catch 
+{
+
+write-host  $_.Exception.Message -fore Red
+break 
+
+
+}
+
+write-host "check whethe the current user has domain admin previlige or not" 
+
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole("$DomainName\Domain Admins") -and  (-not  ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole("Enterprise Admins") ) ) 
+  {
+
+    write-host "Sorry you don't have domain admin previliege to run this script" -fore Red
+    Break
+  }
+
+Else 
+  {
+    write-host "User" $UserName "is member of $DomainName\Domain Admins" -fore Green
+    
+  }
+
+#endregion
+
+#region Set the variables
+$Dcs = Get-ADDomainController -Filter * -Server $DomainName
+
+[xml]$xmlfilter = "<QueryList> 
+           <Query Id='0'> 
+              <Select Path='Security'> 
+                 *[EventData[Data[@Name='TargetUserName'] and (Data='$username')]] 
+                  and 
+                 *[EventData[Data[@Name='status'] and (Data='0x18')]] 
+                 and
+                 *[System[(EventID='4771' or EventID='4768' or EventID='4769' )]]
+              </Select> 
+           </Query> 
+<Query Id='1'> 
+              <Select Path='Security'> 
+               *[EventData[Data[@Name='TargetUserName'] and (Data='$username')]] 
+               and  
+               *[EventData[Data[@Name='substatus'] and (Data='0xc000006a')]] 
+                  and
+               *[System[(EventID='4625' )]] 
+               </Select> 
+           </Query> 
+<Query Id='2'> 
+              <Select Path='Security'> 
+               *[EventData[Data[@Name='TargetUserName'] and (Data='$username')]] 
+                  and
+               *[System[(EventID='4740' or EventID='4767' )]] 
+               </Select> 
+           </Query> 
+<Query Id='3'> 
+              <Select Path='Security'> 
+               *[EventData[Data[@Name='TargetUserName'] and (Data='$username')]] 
+               and  
+               *[EventData[Data[@Name='Status'] and (Data='0xc000006a')]] 
+                  and
+               *[System[(EventID='4776' )]] 
+               </Select> 
+           </Query> 
+
+</QueryList>"
+
+$reportpath = read-host "Please enter the path of the report (leave it blank to use the default path)"
+
+if ($reportpath)
+    {
+      $fullpath = $reportpath + "\report.csv"
+    }
+Else 
+    {
+     $fullpath = (get-location).path + "\Report.csv"
+    
+    }
+
+
+$AllEvents = @()
+#endregion 
+
+
+#region get events from all domain controllers
+
+foreach ($dc in $Dcs)
+{
+
+$serverName = $dc.HostName
+
+
+Write-Host "Checking connectivity to:" $serverName 
+
+$PingStatus = gwmi win32_pingStatus -Filter "Address = '$serverName'"
+
+if ($PingStatus.StatusCode -eq 0)
+    {  
+      Write-Host $serverName  " is Online" -fore Green
+      Write-Host "Collecting logs from:" $serverName
+      $Events = get-winevent -FilterXml $xmlfilter -ComputerName $serverName -ErrorAction SilentlyContinue | select MachineName,TimeCreated,ProviderName,Id,Message
+      write-host "Found"  $Events.count "Events on" $serverName "for" $UserName -BackgroundColor Red
+      $AllEvents += $Events
+    }
+
+Else 
+   {
+     Write-Host $serverName  " is offline" -fore Red
+   }
+
+
+}
+
+#endregion 
+
+
+#region save the report 
+
+if ($AllEvents -ne 0)
+
+   { 
+     $AllEvents | select MachineName,TimeCreated,ProviderName,Id,@{n='Message';e={$_.Message -replace '\s+', " "}} | Export-Csv -Path $fullpath -NoTypeInformation
+   }
+
+
+Write-Host  $AllEvents.count "events found on all domain controllers" -BackgroundColor Red
+
+#endregion 
